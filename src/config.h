@@ -19,7 +19,7 @@
     #define COMANDO_QP "QP:" // Quantidade de pulsos
     #define COMANDO_RI "RI:" // Registra id RFID do administrador (para remover basta gravar uma zerada)
     #define COMANDO_VP "VP:" // Volume parcial
-    #define COMANDO_TO "TO:" // Configura timeout, tempo aguardando inicio do fluxo
+    #define COMANDO_TO   "TO:"   // Configura timeout, tempo aguardando inicio do fluxo
     
     // Habilita modulos para compilação
     #define USAR_ESP32_UART_BLE
@@ -62,8 +62,19 @@
         #define LED_STATUS_ON LOW
     #endif
 
-    //
-    #define BLE_NAME "CHOPPE"
+    // Nome BLE do dispositivo
+    // IMPORTANTE: deve iniciar com prefixo "CHOPP_" seguido do ID unico da unidade.
+    // O app Android aceita apenas dispositivos com este prefixo (ex: CHOPP_E123, CHOPP_F45A).
+    // Substitua 0001 pelo identificador unico de cada unidade (ex: ultimos 4 digitos do MAC).
+    #define BLE_NAME "CHOPP_0001"
+
+    // PIN de autenticacao BLE
+    // Enviado pelo app Android apos conexao GATT para validar o acesso.
+    // O ESP32 compara o PIN recebido via comando $AUTH:<pin> com este valor.
+    #define BLE_AUTH_PIN "259087"
+
+    // Comando de autenticacao BLE
+    #define COMANDO_AUTH "AUTH:"  // Autenticacao por PIN
 
     // Flag para identificar se os dados foram gravados na EEPROM
     #define MAGIC_FLAG_EEPROM 0xF2F2  
