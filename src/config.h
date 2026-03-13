@@ -9,7 +9,10 @@
     #define PULSO_LITRO 5880 //1L = 5880 square waves
     #define RELE_ON     LOW
     #define SENSOR_ON   LOW
-    #define TIMER_OUT_SENSOR 2000LL
+    // FIX: Timeout aumentado de 2000ms para 30000ms (30s).
+    // Necessário para que a válvula permaneça aberta durante reconexão BLE.
+    // O Android leva até 15s de backoff + bond + discoverServices para reconectar.
+    #define TIMER_OUT_SENSOR 30000LL
 
     #define COMANDO_ML "ML:" // Libera quantidade de ML
     #define COMANDO_PL "PL:" // Configura pulso por litro no sensor de fluxo

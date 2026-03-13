@@ -9,4 +9,10 @@
     void taskLiberaML(void *pvParameters);
     void leConfiguracao();
     void gravaConfiguracao();
+
+    // Variáveis globais de estado da operação em andamento
+    // Usadas pelo onConnect() do BLE para enviar status ao reconectar
+    extern volatile bool  operacaoEmAndamento;
+    extern volatile float mlRestante;
+    extern volatile float mlLiberadoGlobal;
 #endif    

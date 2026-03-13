@@ -68,6 +68,15 @@
             // Reseta autenticacao a cada nova conexao
             bleAutenticado = false;
             DBG_PRINT(F("\n[BLE] Aguardando autenticacao (bond nativo ou $AUTH:PIN)"));
+            // Se havia uma operacao em andamento, envia o status atual
+            // para que o Android saiba quantos ML ainda faltam
+            if (operacaoEmAndamento) {
+                delay(800); // aguarda autenticacao
+                String statusReconexao = COMANDO_VP + String(mlLiberadoGlobal, 3);
+                enviaBLE(statusReconexao);
+                DBG_PRINT(F("\n[BLE] Reconexao durante operacao — VP enviado: "));
+                DBG_PRINT(mlLiberadoGlobal, 3);
+            }
         };
 
         void onDisconnect(BLEServer *pServer) {
