@@ -1,3 +1,4 @@
+#include "operacional.h"
 #include "operaBLE.h"
 
 #ifdef USAR_ESP32_UART_BLE

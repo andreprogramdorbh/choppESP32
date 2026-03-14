@@ -1,3 +1,13 @@
+#include <Arduino.h>
+#include <WiFi.h>
+
+String gerarNomeChopp() {
+    uint64_t mac = ESP.getEfuseMac();
+    uint16_t last4 = mac & 0xFFFF;
+    char nome[20];
+    sprintf(nome, "CHOPP_%04X", last4);
+    return String(nome);
+}
 #include "config.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -22,17 +32,10 @@ void setup() {
 
     pinMode( PINO_SENSOR_FLUSO, INPUT);
     
-    // Inicia porta para debug
-    #ifdef debug_debug
-        Serial.begin(115200);
-        delay(3000);
-        unsigned long tF = millis() + 5000UL;
-        while ((!Serial)&&(millis() < tF)){
-            yield();
-        }
-        Serial.println();
-        Serial.println(F("[SETUP] Iniciando Maquina")); 
-    #endif
+    Serial.begin(115200);
+    String nome = gerarNomeChopp();
+    Serial.print("Nome gerado: ");
+    Serial.println(nome);
 
     // Efetua a leitura da configuração gravada na EEPROM
     leConfiguracao();

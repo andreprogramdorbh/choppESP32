@@ -1,4 +1,13 @@
 #include "operacional.h"
+
+void executaOperacao(String comando)
+{
+    Serial.println("Executando operação:");
+    Serial.println(comando);
+
+    // Aqui entra sua lógica de operação
+}
+#include "operacional.h"
 /* 
     *** Apenas para observar ***
     Sensor de fluxo YF-S401
