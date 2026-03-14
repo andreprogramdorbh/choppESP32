@@ -198,7 +198,7 @@
 
 void setupBLE() {
 
-    BLEDevice::init(BLE_NAME);
+    BLEDevice::init(BLE_NAME.c_str());
 
     // Segurança BLE com bond/pairing PIN 259087
     BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);

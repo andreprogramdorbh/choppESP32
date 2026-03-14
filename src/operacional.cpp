@@ -1,3 +1,11 @@
+
+// Includes padrão
+#include <Arduino.h>
+#include <WiFi.h>
+#include <EEPROM.h>
+#include <cstring>
+
+#include "config.h"
 #include "operacional.h"
 
 void executaOperacao(String comando)
@@ -7,7 +15,7 @@ void executaOperacao(String comando)
 
     // Aqui entra sua lógica de operação
 }
-#include "operacional.h"
+
 /* 
     *** Apenas para observar ***
     Sensor de fluxo YF-S401
@@ -49,7 +57,7 @@ void executaOperacao(String comando)
 */
 
 extern config_t configuracao;
-extern xQueueHandle listaLiberarML;
+extern QueueHandle_t listaLiberarML;
 extern TaskHandle_t taskRFIDHandle;
 
 // Declaração externa do estado BLE (definido em operaBLE.cpp)

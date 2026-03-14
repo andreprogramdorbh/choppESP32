@@ -2,7 +2,7 @@
 #ifdef USAR_RFID
 
 extern config_t configuracao;
-extern xQueueHandle listaLiberarML;
+extern QueueHandle_t listaLiberarML;
 
 MFRC522 mfrc522(PINO_RC522_SSEL, PINO_RC522_RSET);
 

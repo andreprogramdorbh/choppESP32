@@ -69,7 +69,7 @@
     // IMPORTANTE: deve iniciar com prefixo "CHOPP_" seguido do ID unico da unidade.
     // O app Android aceita apenas dispositivos com este prefixo (ex: CHOPP_E123, CHOPP_F45A).
     // Substitua 0001 pelo identificador unico de cada unidade (ex: ultimos 4 digitos do MAC).
-    #define BLE_NAME "CHOPP_0001"
+    extern String BLE_NAME;
 
     // PIN de autenticacao BLE
     // Enviado pelo app Android apos conexao GATT para validar o acesso.

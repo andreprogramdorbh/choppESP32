@@ -16,9 +16,11 @@ String gerarNomeChopp() {
 #include "operaBLE.h"
 #include "operaRFID.h"
 
+String BLE_NAME;
+
 config_t configuracao = {0};
 
-xQueueHandle listaLiberarML;
+QueueHandle_t listaLiberarML;
 
 TaskHandle_t taskRFIDHandle = NULL;
 
@@ -32,14 +34,17 @@ void setup() {
 
     pinMode( PINO_SENSOR_FLUSO, INPUT);
     
+
     Serial.begin(115200);
-    String nome = gerarNomeChopp();
-    Serial.print("Nome gerado: ");
-    Serial.println(nome);
+    BLE_NAME = gerarNomeChopp();
+    Serial.print("ESP32 MAC: ");
+    Serial.println(WiFi.macAddress());
+    Serial.print("BLE NAME: ");
+    Serial.println(BLE_NAME);
 
     // Efetua a leitura da configuração gravada na EEPROM
     leConfiguracao();
-        
+
     #ifdef USAR_ESP32_UART_BLE
         setupBLE();
     #endif

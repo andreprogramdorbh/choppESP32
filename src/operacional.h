@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 
-void executaOperacao(String comando);
+
 
 #endif
 #include "config.h"
