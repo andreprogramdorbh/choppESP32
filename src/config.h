@@ -133,7 +133,8 @@
     // ─────────────────────────────────────────────────────────────────────────
     // EEPROM — Magic flag para identificar configuração gravada
     // ─────────────────────────────────────────────────────────────────────────
-    #define MAGIC_FLAG_EEPROM 0xF2F2  
+    #define MAGIC_FLAG_EEPROM 0xF2F2
+    #define MAGIC_EEPROM     0xF2F2  // Alias para o novo protocolo
 
     // ─────────────────────────────────────────────────────────────────────────
     // WiFi (modo AP e credenciais padrão de desenvolvimento)
