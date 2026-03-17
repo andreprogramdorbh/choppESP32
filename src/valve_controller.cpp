@@ -167,7 +167,13 @@ void taskDispensacao(void* param) {
         uint32_t pulsosFinal = flowSensor_getPulsos();
         g_opState.mlLiberado     = mlFinal;
         g_opState.pulsosContados = pulsosFinal;
-        g_opState.state          = SYS_IDLE;
+
+        // [v2.3] Reset explícito SYS_RUNNING → SYS_IDLE para evitar estado fantasma
+        // Garante transição mesmo em caso de SYS_ERROR ou SYS_STOPPING
+        if (g_opState.state != SYS_IDLE) {
+            DBG_PRINTF("[VALVE] Estado resetado: %d → SYS_IDLE\n", (int)g_opState.state);
+            g_opState.state = SYS_IDLE;
+        }
 
         // Envia VP final, QP e DONE
         snprintf(txBuf, sizeof(txBuf), "%s%u", RESP_VP_PREFIX, mlFinal);
@@ -177,6 +183,16 @@ void taskDispensacao(void* param) {
         bleProtocol_send(txBuf);
 
         bleProtocol_send(RESP_DONE);
+
+        // [v2.3] Log de auditoria: serve_complete com volume real e alvo
+        {
+            extern void eventLog_record(const char* event);
+            char evtBuf[80];
+            snprintf(evtBuf, sizeof(evtBuf),
+                     "serve_complete|ml=%u|target=%u",
+                     mlFinal, g_opState.mlSolicitado);
+            eventLog_record(evtBuf);
+        }
 
         DBG_PRINTF("[DISP] Concluído | ml=%u | pulsos=%u\n", mlFinal, pulsosFinal);
     }

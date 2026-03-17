@@ -103,11 +103,16 @@ typedef struct {
     char cmd[16];                       // Nome do comando (ex: "ML", "AUTH")
     char value[64];                     // Valor do comando (ex: "300", "259087")
     char cmd_id[PROTO_CMD_ID_MAX_LEN];  // ID único do comando (ex: "CMD123")
+    char session_id[24];                // [v2.3] SESSION_ID (ex: "SES_8472")
     bool has_value;                     // true se possui campo de valor
     bool has_cmd_id;                    // true se possui CMD_ID
+    bool has_session;                   // [v2.3] true se possui SESSION_ID
 } ParsedCommand;
 
 // ── Estrutura de estado da operação ──────────────────────────────────────
+#define OP_SESSION_ID_MAX_LEN   24
+#define OP_CMD_ID_MAX_LEN       32
+
 typedef struct {
     volatile SystemState state;
     volatile uint32_t    mlSolicitado;
@@ -120,6 +125,9 @@ typedef struct {
     volatile uint32_t    timeoutSensor;
     volatile uint64_t    ultimoComandoMs;   // Timestamp do último comando (watchdog)
     volatile uint64_t    ultimoPulsoMs;     // Timestamp do último pulso (sensor timeout)
+    // [v2.3] SESSION_ID e CMD_ID da operação em andamento
+    char                 sessionId[OP_SESSION_ID_MAX_LEN];   // SESSION_ID atual
+    char                 currentCmdId[OP_CMD_ID_MAX_LEN];   // CMD_ID atual
 } OperationState;
 
 // ── Instância global de estado (definida em main.cpp) ────────────────────

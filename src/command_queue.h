@@ -24,7 +24,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Configuração ──────────────────────────────────────────────────────────
-#define CMD_QUEUE_MAX_SIZE      5       // Máximo de comandos na fila
+#define CMD_QUEUE_MAX_SIZE      8       // Máximo de comandos na fila (v2.3: aumentado de 5 para 8)
 #define CMD_QUEUE_CMD_MAX_LEN   PROTO_RX_BUFFER_SIZE
 
 // ── Resposta de fila cheia ────────────────────────────────────────────────

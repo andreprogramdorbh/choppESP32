@@ -48,7 +48,9 @@ void commandParser_init() {
     cmdQueue_init();
     eventLog_init();
     memset(s_lastCommandId, 0, sizeof(s_lastCommandId));
-    DBG_PRINTLN("[PARSER] Inicializado v2.2 (event_log + lastCommandId + SERVE|pipe)");
+    memset(g_opState.sessionId,    0, sizeof(g_opState.sessionId));
+    memset(g_opState.currentCmdId, 0, sizeof(g_opState.currentCmdId));
+    DBG_PRINTLN("[PARSER] Inicializado v2.3 (SESSION_ID + registerWithResult + sync pós-reconexão)");
 }
 
 // ── Deduplicação (delegada ao command_history) ────────────────────────────
@@ -100,15 +102,26 @@ bool commandParser_parse(const char* raw, ParsedCommand* out) {
             out->has_value = true;
         }
 
-        // Extrai ID do formato ID=XXXX
+        // Extrai ID=XXXX e SESSION=XXXX do formato pipe
         if (token3) {
-            const char* idPrefix = "ID=";
+            const char* idPrefix  = "ID=";
+            const char* sesPrefix = "SESSION=";
             if (strncmp(token3, idPrefix, 3) == 0) {
                 strncpy(out->cmd_id, token3 + 3, sizeof(out->cmd_id) - 1);
+                out->has_cmd_id = true;
+            } else if (strncmp(token3, sesPrefix, 8) == 0) {
+                strncpy(out->session_id, token3 + 8, sizeof(out->session_id) - 1);
+                out->has_session = true;
             } else {
                 strncpy(out->cmd_id, token3, sizeof(out->cmd_id) - 1);
+                out->has_cmd_id = true;
             }
-            out->has_cmd_id = true;
+            // Verifica token4 para SESSION quando token3 foi ID
+            char* token4 = strtok(NULL, "|");
+            if (token4 && strncmp(token4, sesPrefix, 8) == 0) {
+                strncpy(out->session_id, token4 + 8, sizeof(out->session_id) - 1);
+                out->has_session = true;
+            }
         }
 
         return true;
@@ -171,11 +184,26 @@ static void sendAck(const ParsedCommand* cmd, const char* cmdName) {
     sendAndLog(buf);
 }
 
-// ── Envia DONE com ID e ml reais (ex: DONE|8472|298) ─────────────────────
+// ── Envia DONE com ID, ml reais e SESSION (ex: DONE|8472|298|SES_001) ────────
 static void sendDone(const ParsedCommand* cmd, uint32_t mlReais) {
     char buf[PROTO_TX_BUFFER_SIZE];
     if (cmd->has_cmd_id && cmd->cmd_id[0] != '\0') {
-        snprintf(buf, sizeof(buf), "DONE|%s|%u", cmd->cmd_id, mlReais);
+        if (cmd->has_session && cmd->session_id[0] != '\0') {
+            // [v2.3] DONE|ID|ml|SESSION
+            snprintf(buf, sizeof(buf), "DONE|%s|%u|%s",
+                     cmd->cmd_id, mlReais, cmd->session_id);
+        } else if (g_opState.sessionId[0] != '\0') {
+            // Usa SESSION do estado global se disponível
+            snprintf(buf, sizeof(buf), "DONE|%s|%u|%s",
+                     cmd->cmd_id, mlReais, g_opState.sessionId);
+        } else {
+            snprintf(buf, sizeof(buf), "DONE|%s|%u", cmd->cmd_id, mlReais);
+        }
+        // [v2.3] Registra resultado no command_history para sincronização pós-reconexão
+        const char* sesId = (cmd->has_session && cmd->session_id[0] != '\0')
+                            ? cmd->session_id
+                            : g_opState.sessionId;
+        cmdHistory_registerWithResult(cmd->cmd_id, mlReais, sesId);
     } else {
         snprintf(buf, sizeof(buf), "DONE");
     }
@@ -239,10 +267,26 @@ static void handleML(const ParsedCommand* cmd) {
     sendAck(cmd, CMD_ML);
     watchdog_kick();
 
-    // ── Log de evento ─────────────────────────────────────────────────────
-    char evtBuf[64];
-    snprintf(evtBuf, sizeof(evtBuf), "serve_start|ml=%u|id=%s",
-             ml, cmd->has_cmd_id ? cmd->cmd_id : "none");
+    // ── [v2.3] Armazena SESSION_ID e CMD_ID no estado global ─────────────
+    if (cmd->has_cmd_id) {
+        strncpy(g_opState.currentCmdId, cmd->cmd_id,
+                sizeof(g_opState.currentCmdId) - 1);
+    } else {
+        g_opState.currentCmdId[0] = '\0';
+    }
+    if (cmd->has_session) {
+        strncpy(g_opState.sessionId, cmd->session_id,
+                sizeof(g_opState.sessionId) - 1);
+    } else {
+        g_opState.sessionId[0] = '\0';
+    }
+
+    // ── Log de evento com SESSION_ID ──────────────────────────────────────
+    char evtBuf[80];
+    snprintf(evtBuf, sizeof(evtBuf), "serve_start|ml=%u|id=%s|session=%s",
+             ml,
+             cmd->has_cmd_id  ? cmd->cmd_id    : "none",
+             cmd->has_session ? cmd->session_id : "none");
     eventLog_record(evtBuf);
 
     // ── Executa a operação APÓS o ACK ─────────────────────────────────────
@@ -337,20 +381,40 @@ void taskCommandProcessor(void* param) {
             continue;
         }
 
-        // ── Deduplicação via command_history ──────────────────────────────
+        // ── Deduplication via command_history ────────────────────────────────────────────
         if (cmd.has_cmd_id && cmdHistory_isDuplicate(cmd.cmd_id)) {
             DBG_PRINTF("[PARSER] DUPLICADO (history): cmd=%s id=%s\n", cmd.cmd, cmd.cmd_id);
-            // Para SERVE/ML: reenvia ACK (não executa)
             if (strcmp(cmd.cmd, CMD_ML) == 0) {
-                sendAck(&cmd, CMD_ML);
+                // [v2.3] Sincronização pós-reconexão:
+                // Se já foi concluído (DONE), responde DONE|ID|ml para o Android saber
+                uint32_t mlReal = 0;
+                char sesId[OP_SESSION_ID_MAX_LEN] = {0};
+                if (cmdHistory_isDone(cmd.cmd_id, &mlReal, sesId, sizeof(sesId))) {
+                    char doneResp[PROTO_TX_BUFFER_SIZE];
+                    if (sesId[0] != '\0') {
+                        snprintf(doneResp, sizeof(doneResp), "DONE|%s|%u|%s",
+                                 cmd.cmd_id, mlReal, sesId);
+                    } else {
+                        snprintf(doneResp, sizeof(doneResp), "DONE|%s|%u",
+                                 cmd.cmd_id, mlReal);
+                    }
+                    sendAndLog(doneResp);
+                    DBG_PRINTF("[PARSER] Sync pós-reconexão: DONE enviado para id=%s ml=%u\n",
+                               cmd.cmd_id, mlReal);
+                    eventLog_record("duplicate_command|sync_done");
+                } else {
+                    // Em andamento ou não concluído: reenvia ACK
+                    sendAck(&cmd, CMD_ML);
+                    eventLog_record("duplicate_command|ack_resent");
+                }
             } else {
                 sendAndLog(RESP_DUPLICATE);
+                eventLog_record("duplicate_command|history");
             }
-            eventLog_record("duplicate_command|history");
             continue;
         }
 
-        // ── Registra CMD_ID no histórico ──────────────────────────────────
+        // ── Registra CMD_ID no histórico ────────────────────────────────────────────
         if (cmd.has_cmd_id) {
             cmdHistory_register(cmd.cmd_id);
         }
