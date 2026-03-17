@@ -84,6 +84,18 @@ void valveController_stop(const char* motivo) {
     g_opState.state      = SYS_IDLE;
     g_opState.mlLiberado = flowSensor_getMl();
 
+    // [v2.3 FIX-1+FIX-3] Limpa SESSION_ID e CMD_ID com mutex após STOP
+    // Evita que próximo comando herde sessão antiga (BUG GRAVE)
+    if (OP_STATE_LOCK() == pdTRUE) {
+        g_opState.sessionId[0]    = '\0';
+        g_opState.currentCmdId[0] = '\0';
+        OP_STATE_UNLOCK();
+    } else {
+        // Fallback sem mutex (improvável, mas seguro)
+        g_opState.sessionId[0]    = '\0';
+        g_opState.currentCmdId[0] = '\0';
+    }
+
     DBG_PRINTF("[VALVE] STOP | motivo=%s | liberado=%u ml\n",
                motivo, g_opState.mlLiberado);
     bleProtocol_send(RESP_STOP_OK);
@@ -163,7 +175,7 @@ void taskDispensacao(void* param) {
         flowSensor_disable();
         valveController_close();
 
-        uint32_t mlFinal   = flowSensor_getMl();
+        uint32_t mlFinal     = flowSensor_getMl();
         uint32_t pulsosFinal = flowSensor_getPulsos();
         g_opState.mlLiberado     = mlFinal;
         g_opState.pulsosContados = pulsosFinal;
@@ -185,13 +197,39 @@ void taskDispensacao(void* param) {
         bleProtocol_send(RESP_DONE);
 
         // [v2.3] Log de auditoria: serve_complete com volume real e alvo
+        // [v2.3 FIX-3] Lê sessionId/currentCmdId com mutex antes de limpar
         {
             extern void eventLog_record(const char* event);
             char evtBuf[80];
+            char logCmdId[OP_CMD_ID_MAX_LEN]       = {0};
+            char logSession[OP_SESSION_ID_MAX_LEN]  = {0};
+
+            if (OP_STATE_LOCK() == pdTRUE) {
+                strncpy(logCmdId,   g_opState.currentCmdId, sizeof(logCmdId)   - 1);
+                strncpy(logSession, g_opState.sessionId,    sizeof(logSession) - 1);
+                OP_STATE_UNLOCK();
+            } else {
+                strncpy(logCmdId,   g_opState.currentCmdId, sizeof(logCmdId)   - 1);
+                strncpy(logSession, g_opState.sessionId,    sizeof(logSession) - 1);
+            }
+
             snprintf(evtBuf, sizeof(evtBuf),
-                     "serve_complete|ml=%u|target=%u",
-                     mlFinal, g_opState.mlSolicitado);
+                     "serve_complete|ml=%u|target=%u|id=%s|session=%s",
+                     mlFinal, g_opState.mlSolicitado,
+                     logCmdId[0]   ? logCmdId   : "none",
+                     logSession[0] ? logSession : "none");
             eventLog_record(evtBuf);
+        }
+
+        // [v2.3 FIX-1+FIX-3] Limpa SESSION_ID e CMD_ID com mutex após DONE
+        // Evita que próximo comando herde sessão antiga (BUG GRAVE)
+        if (OP_STATE_LOCK() == pdTRUE) {
+            g_opState.sessionId[0]    = '\0';
+            g_opState.currentCmdId[0] = '\0';
+            OP_STATE_UNLOCK();
+        } else {
+            g_opState.sessionId[0]    = '\0';
+            g_opState.currentCmdId[0] = '\0';
         }
 
         DBG_PRINTF("[DISP] Concluído | ml=%u | pulsos=%u\n", mlFinal, pulsosFinal);

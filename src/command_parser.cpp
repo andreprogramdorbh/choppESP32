@@ -188,22 +188,29 @@ static void sendAck(const ParsedCommand* cmd, const char* cmdName) {
 static void sendDone(const ParsedCommand* cmd, uint32_t mlReais) {
     char buf[PROTO_TX_BUFFER_SIZE];
     if (cmd->has_cmd_id && cmd->cmd_id[0] != '\0') {
-        if (cmd->has_session && cmd->session_id[0] != '\0') {
+        // [v2.3 FIX-3] Lê sessionId com mutex para evitar race condition
+        char localSession[OP_SESSION_ID_MAX_LEN] = {0};
+        if (OP_STATE_LOCK() == pdTRUE) {
+            strncpy(localSession, g_opState.sessionId, sizeof(localSession) - 1);
+            OP_STATE_UNLOCK();
+        } else {
+            // Fallback: copia sem mutex (improvável)
+            strncpy(localSession, g_opState.sessionId, sizeof(localSession) - 1);
+        }
+
+        const char* effectiveSession = (cmd->has_session && cmd->session_id[0] != '\0')
+                                       ? cmd->session_id
+                                       : localSession;
+
+        if (effectiveSession[0] != '\0') {
             // [v2.3] DONE|ID|ml|SESSION
             snprintf(buf, sizeof(buf), "DONE|%s|%u|%s",
-                     cmd->cmd_id, mlReais, cmd->session_id);
-        } else if (g_opState.sessionId[0] != '\0') {
-            // Usa SESSION do estado global se disponível
-            snprintf(buf, sizeof(buf), "DONE|%s|%u|%s",
-                     cmd->cmd_id, mlReais, g_opState.sessionId);
+                     cmd->cmd_id, mlReais, effectiveSession);
         } else {
             snprintf(buf, sizeof(buf), "DONE|%s|%u", cmd->cmd_id, mlReais);
         }
         // [v2.3] Registra resultado no command_history para sincronização pós-reconexão
-        const char* sesId = (cmd->has_session && cmd->session_id[0] != '\0')
-                            ? cmd->session_id
-                            : g_opState.sessionId;
-        cmdHistory_registerWithResult(cmd->cmd_id, mlReais, sesId);
+        cmdHistory_registerWithResult(cmd->cmd_id, mlReais, effectiveSession);
     } else {
         snprintf(buf, sizeof(buf), "DONE");
     }
@@ -267,18 +274,38 @@ static void handleML(const ParsedCommand* cmd) {
     sendAck(cmd, CMD_ML);
     watchdog_kick();
 
-    // ── [v2.3] Armazena SESSION_ID e CMD_ID no estado global ─────────────
-    if (cmd->has_cmd_id) {
-        strncpy(g_opState.currentCmdId, cmd->cmd_id,
-                sizeof(g_opState.currentCmdId) - 1);
+    // ── [v2.3 FIX-3] Armazena SESSION_ID e CMD_ID com mutex ──────────────
+    // Protege contra race condition entre taskCommandProcessor (Core 0)
+    // e taskDispensacao (Core 1) que lê sessionId ao enviar DONE
+    if (OP_STATE_LOCK() == pdTRUE) {
+        if (cmd->has_cmd_id) {
+            strncpy(g_opState.currentCmdId, cmd->cmd_id,
+                    sizeof(g_opState.currentCmdId) - 1);
+            g_opState.currentCmdId[sizeof(g_opState.currentCmdId) - 1] = '\0';
+        } else {
+            g_opState.currentCmdId[0] = '\0';
+        }
+        if (cmd->has_session) {
+            strncpy(g_opState.sessionId, cmd->session_id,
+                    sizeof(g_opState.sessionId) - 1);
+            g_opState.sessionId[sizeof(g_opState.sessionId) - 1] = '\0';
+        } else {
+            g_opState.sessionId[0] = '\0';
+        }
+        OP_STATE_UNLOCK();
     } else {
-        g_opState.currentCmdId[0] = '\0';
-    }
-    if (cmd->has_session) {
-        strncpy(g_opState.sessionId, cmd->session_id,
-                sizeof(g_opState.sessionId) - 1);
-    } else {
-        g_opState.sessionId[0] = '\0';
+        // Fallback sem mutex (improvável, mas seguro)
+        DBG_PRINTLN("[PARSER] WARN: mutex timeout ao gravar sessionId");
+        if (cmd->has_cmd_id) {
+            strncpy(g_opState.currentCmdId, cmd->cmd_id,
+                    sizeof(g_opState.currentCmdId) - 1);
+        }
+        if (cmd->has_session) {
+            strncpy(g_opState.sessionId, cmd->session_id,
+                    sizeof(g_opState.sessionId) - 1);
+        } else {
+            g_opState.sessionId[0] = '\0';
+        }
     }
 
     // ── Log de evento com SESSION_ID ──────────────────────────────────────

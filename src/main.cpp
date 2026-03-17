@@ -39,6 +39,11 @@ OperationState g_opState = {
     .ultimoPulsoMs   = 0,
 };
 
+// ── Mutex do estado da operação [v2.3 FIX-3] ─────────────────────────────
+// Protege sessionId e currentCmdId contra race condition
+// entre taskCommandProcessor (Core 0) e taskDispensacao (Core 1)
+SemaphoreHandle_t g_opStateMutex = nullptr;
+
 // ── Preferences para persistência de configuração ─────────────────────────
 static Preferences prefs;
 
@@ -83,6 +88,12 @@ void setup() {
 
     // ── Carrega configurações persistidas ─────────────────────────────────
     carregarConfiguracoes();
+
+    // ── [v2.3 FIX-3] Cria mutex de estado ANTES de qualquer tarefa ────────
+    // Protege sessionId e currentCmdId contra race condition entre cores
+    g_opStateMutex = xSemaphoreCreateMutex();
+    configASSERT(g_opStateMutex != nullptr);
+    DBG_PRINTLN("[MAIN] g_opStateMutex criado (sessionId/currentCmdId thread-safe)");
 
     // ── Inicializa módulos de hardware ────────────────────────────────────
     // ORDEM IMPORTANTE: válvula PRIMEIRO para garantir estado seguro

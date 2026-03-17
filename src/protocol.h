@@ -133,6 +133,16 @@ typedef struct {
 // ── Instância global de estado (definida em main.cpp) ────────────────────
 extern OperationState g_opState;
 
+// ── Mutex do estado da operação (definido em main.cpp) ───────────────────
+// [v2.3 FIX-3] Protege sessionId e currentCmdId contra race condition
+// entre taskCommandProcessor (Core 1) e callbacks BLE (Core 0)
+extern SemaphoreHandle_t g_opStateMutex;
+
+// ── Macros de acesso thread-safe ao sessionId / currentCmdId ─────────────
+// Uso: OP_STATE_LOCK(); ... acessa g_opState.sessionId ... OP_STATE_UNLOCK();
+#define OP_STATE_LOCK()   xSemaphoreTake(g_opStateMutex, pdMS_TO_TICKS(20))
+#define OP_STATE_UNLOCK() xSemaphoreGive(g_opStateMutex)
+
 // ── Mutex BLE (definido em ble_protocol.cpp) ─────────────────────────────
 extern SemaphoreHandle_t g_bleMutex;
 
