@@ -5,27 +5,36 @@
 #include "flow_sensor.h"
 #include "watchdog.h"
 #include "ble_protocol.h"
+#include "event_log.h"
 #include <string.h>
 #include <stdlib.h>
 
 // ═══════════════════════════════════════════════════════════════════════════
-// MÓDULO: command_parser.cpp — v2.1 (Robustez Industrial)
+// MÓDULO: command_parser.cpp — v2.2 (Protocolo Industrial 24h)
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// MELHORIAS v2.1:
-//   - Integração com command_history (20 IDs, thread-safe, limpo no disconnect)
-//   - Integração com command_queue (FIFO 5, QUEUE:FULL, STOP com prioridade)
-//   - ACK IMEDIATO garantido ANTES de qualquer execução (< 100ms)
-//   - Logs industriais padronizados: RX: / TX: / EXEC: / DONE / ERROR:
-//   - Timestamp em cada log para rastreabilidade
+// NOVIDADES v2.2:
+//   - Suporte ao formato alternativo: SERVE|ml|ID=XXXX (compatível com vending)
+//   - ACK|ID imediato para comandos com ID (ex: ACK|8472)
+//   - DONE|ID|ml_reais ao concluir (ex: DONE|8472|298)
+//   - lastCommandId — proteção simples anti-duplicação (complementa command_history)
+//   - STATUS responde READY / BUSY / ERROR (sem prefixo STATUS:)
+//   - Integração com event_log para rastreabilidade de eventos críticos
+//   - Comando $LOGS para enviar log interno via BLE
+//   - Watchdog BLE de 30s (configurado no watchdog.cpp)
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Macro de log industrial com timestamp ─────────────────────────────────
-#define LOG_RX(cmd)   DBG_PRINTF("[%llu] RX: %s\n",   (uint64_t)esp_timer_get_time()/1000ULL, cmd)
-#define LOG_TX(resp)  DBG_PRINTF("[%llu] TX: %s\n",   (uint64_t)esp_timer_get_time()/1000ULL, resp)
+#define LOG_RX(cmd)        DBG_PRINTF("[%llu] RX: %s\n",   (uint64_t)esp_timer_get_time()/1000ULL, cmd)
+#define LOG_TX(resp)       DBG_PRINTF("[%llu] TX: %s\n",   (uint64_t)esp_timer_get_time()/1000ULL, resp)
 #define LOG_EXEC(cmd, val) DBG_PRINTF("[%llu] EXEC: %s %s\n", (uint64_t)esp_timer_get_time()/1000ULL, cmd, val)
-#define LOG_DONE()    DBG_PRINTF("[%llu] DONE\n",      (uint64_t)esp_timer_get_time()/1000ULL)
-#define LOG_ERR(msg)  DBG_PRINTF("[%llu] ERROR: %s\n", (uint64_t)esp_timer_get_time()/1000ULL, msg)
+#define LOG_DONE()         DBG_PRINTF("[%llu] DONE\n",      (uint64_t)esp_timer_get_time()/1000ULL)
+#define LOG_ERR(msg)       DBG_PRINTF("[%llu] ERROR: %s\n", (uint64_t)esp_timer_get_time()/1000ULL, msg)
+
+// ── lastCommandId — proteção simples anti-duplicação ─────────────────────
+// Armazena o ID do último comando SERVE executado para evitar dupla liberação.
+// Complementa o command_history (buffer circular de 20 IDs).
+static char s_lastCommandId[PROTO_CMD_ID_MAX_LEN] = {0};
 
 // ── Wrapper de envio com log TX ───────────────────────────────────────────
 static void sendAndLog(const char* resp) {
@@ -37,7 +46,9 @@ static void sendAndLog(const char* resp) {
 void commandParser_init() {
     cmdHistory_init();
     cmdQueue_init();
-    DBG_PRINTLN("[PARSER] Inicializado v2.1 (command_history + command_queue)");
+    eventLog_init();
+    memset(s_lastCommandId, 0, sizeof(s_lastCommandId));
+    DBG_PRINTLN("[PARSER] Inicializado v2.2 (event_log + lastCommandId + SERVE|pipe)");
 }
 
 // ── Deduplicação (delegada ao command_history) ────────────────────────────
@@ -49,18 +60,61 @@ void commandParser_registerCmdId(const char* cmd_id) {
     cmdHistory_register(cmd_id);
 }
 
-// ── Parser ────────────────────────────────────────────────────────────────
-// Formato: $CMD:VALOR:CMDID  ou  $CMD:CMDID  ou  $CMD:VALOR  ou  $CMD
+// ═══════════════════════════════════════════════════════════════════════════
+// PARSER — Suporta dois formatos:
+//
+// Formato A (prefixo $, separador :):
+//   $CMD:VALOR:CMDID  |  $CMD:CMDID  |  $CMD:VALOR  |  $CMD
+//
+// Formato B (sem prefixo, separador |):
+//   SERVE|200|ID=8472
+//   PING
+//   STATUS
+//   STOP
+// ═══════════════════════════════════════════════════════════════════════════
 bool commandParser_parse(const char* raw, ParsedCommand* out) {
     if (!raw || !out) return false;
-
     memset(out, 0, sizeof(ParsedCommand));
 
+    // ── Formato B: sem prefixo '$', usa '|' como separador ────────────────
     if (raw[0] != PROTO_PREFIX) {
-        LOG_ERR("Prefixo inválido");
-        return false;
+        char buf[PROTO_RX_BUFFER_SIZE];
+        strncpy(buf, raw, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+
+        char* token1 = strtok(buf, "|");
+        char* token2 = strtok(NULL, "|");
+        char* token3 = strtok(NULL, "|");
+
+        if (!token1) return false;
+
+        // Normaliza: SERVE → ML (mapeamento de compatibilidade)
+        if (strcasecmp(token1, "SERVE") == 0) {
+            strncpy(out->cmd, CMD_ML, sizeof(out->cmd) - 1);
+        } else {
+            strncpy(out->cmd, token1, sizeof(out->cmd) - 1);
+        }
+
+        if (token2) {
+            strncpy(out->value, token2, sizeof(out->value) - 1);
+            out->has_value = true;
+        }
+
+        // Extrai ID do formato ID=XXXX
+        if (token3) {
+            const char* idPrefix = "ID=";
+            if (strncmp(token3, idPrefix, 3) == 0) {
+                strncpy(out->cmd_id, token3 + 3, sizeof(out->cmd_id) - 1);
+            } else {
+                strncpy(out->cmd_id, token3, sizeof(out->cmd_id) - 1);
+            }
+            out->has_cmd_id = true;
+        }
+
+        return true;
     }
 
+    // ── Formato A: prefixo '$', separador ':' ─────────────────────────────
     char buf[PROTO_RX_BUFFER_SIZE];
     strncpy(buf, raw + 1, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
@@ -81,7 +135,7 @@ bool commandParser_parse(const char* raw, ParsedCommand* out) {
             out->has_value  = true;
             out->has_cmd_id = true;
         } else {
-            bool isNumeric = (token2[0] >= '0' && token2[0] <= '9');
+            bool isNumeric  = (token2[0] >= '0' && token2[0] <= '9');
             bool cmdHasValue = (strcmp(out->cmd, CMD_ML)   == 0 ||
                                 strcmp(out->cmd, CMD_PL)   == 0 ||
                                 strcmp(out->cmd, CMD_TO)   == 0 ||
@@ -106,23 +160,49 @@ bool commandParser_parse(const char* raw, ParsedCommand* out) {
 // HANDLERS — ACK IMEDIATO ANTES DE QUALQUER EXECUÇÃO
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ── Envia ACK com ID (ex: ACK|8472) ou ACK genérico ──────────────────────
+static void sendAck(const ParsedCommand* cmd, const char* cmdName) {
+    char buf[PROTO_TX_BUFFER_SIZE];
+    if (cmd->has_cmd_id && cmd->cmd_id[0] != '\0') {
+        snprintf(buf, sizeof(buf), "ACK|%s", cmd->cmd_id);
+    } else {
+        snprintf(buf, sizeof(buf), "%s:ACK", cmdName);
+    }
+    sendAndLog(buf);
+}
+
+// ── Envia DONE com ID e ml reais (ex: DONE|8472|298) ─────────────────────
+static void sendDone(const ParsedCommand* cmd, uint32_t mlReais) {
+    char buf[PROTO_TX_BUFFER_SIZE];
+    if (cmd->has_cmd_id && cmd->cmd_id[0] != '\0') {
+        snprintf(buf, sizeof(buf), "DONE|%s|%u", cmd->cmd_id, mlReais);
+    } else {
+        snprintf(buf, sizeof(buf), "DONE");
+    }
+    sendAndLog(buf);
+}
+
+// ── AUTH ──────────────────────────────────────────────────────────────────
 static void handleAuth(const ParsedCommand* cmd) {
-    // AUTH não precisa de ACK separado — AUTH:OK é o próprio ACK
     if (!cmd->has_value) {
         sendAndLog(RESP_AUTH_FAIL);
+        eventLog_record("auth_fail|reason=no_pin");
         return;
     }
     if (strcmp(cmd->value, BLE_AUTH_PIN) == 0) {
         g_opState.bleAutenticado = true;
         sendAndLog(RESP_AUTH_OK);
         LOG_EXEC(CMD_AUTH, "OK");
+        eventLog_record("auth_ok");
     } else {
         g_opState.bleAutenticado = false;
         sendAndLog(RESP_AUTH_FAIL);
         LOG_ERR("AUTH:FAIL — PIN incorreto");
+        eventLog_record("auth_fail|reason=wrong_pin");
     }
 }
 
+// ── ML / SERVE ────────────────────────────────────────────────────────────
 static void handleML(const ParsedCommand* cmd) {
     if (!cmd->has_value) {
         sendAndLog(RESP_ERROR_INVALID);
@@ -136,21 +216,47 @@ static void handleML(const ParsedCommand* cmd) {
         return;
     }
 
+    // ── Proteção lastCommandId (anti-duplicação simples) ──────────────────
+    if (cmd->has_cmd_id && cmd->cmd_id[0] != '\0') {
+        if (strcmp(s_lastCommandId, cmd->cmd_id) == 0) {
+            // Mesmo ID do último comando — duplicado confirmado
+            char dupResp[PROTO_TX_BUFFER_SIZE];
+            if (cmd->has_cmd_id) {
+                snprintf(dupResp, sizeof(dupResp), "ACK|%s", cmd->cmd_id);
+            } else {
+                strncpy(dupResp, RESP_ML_DUPLICATE, sizeof(dupResp) - 1);
+            }
+            sendAndLog(dupResp);
+            DBG_PRINTF("[PARSER] lastCommandId DUPLICATE: id=%s\n", cmd->cmd_id);
+            eventLog_record("duplicate_command|lastCommandId");
+            return;
+        }
+        // Atualiza lastCommandId
+        strncpy(s_lastCommandId, cmd->cmd_id, sizeof(s_lastCommandId) - 1);
+    }
+
     // ── ACK IMEDIATO (< 100ms) — ANTES de iniciar a dispensação ──────────
-    sendAndLog(RESP_ML_ACK);
+    sendAck(cmd, CMD_ML);
     watchdog_kick();
+
+    // ── Log de evento ─────────────────────────────────────────────────────
+    char evtBuf[64];
+    snprintf(evtBuf, sizeof(evtBuf), "serve_start|ml=%u|id=%s",
+             ml, cmd->has_cmd_id ? cmd->cmd_id : "none");
+    eventLog_record(evtBuf);
 
     // ── Executa a operação APÓS o ACK ─────────────────────────────────────
     LOG_EXEC(CMD_ML, cmd->value);
     if (!valveController_startDispensacao(ml)) {
         sendAndLog(RESP_ERROR_BUSY);
         LOG_ERR("ML:BUSY — dispensação já em andamento");
+        eventLog_record("serve_start|BUSY");
     }
 }
 
+// ── STOP ──────────────────────────────────────────────────────────────────
 static void handleStop(const ParsedCommand* cmd) {
-    // ── ACK imediato para STOP ────────────────────────────────────────────
-    sendAndLog(RESP_STOP_OK);
+    sendAck(cmd, CMD_STOP);
     LOG_EXEC(CMD_STOP, "");
 
     // Limpa a fila de comandos pendentes
@@ -159,25 +265,30 @@ static void handleStop(const ParsedCommand* cmd) {
     // Para a válvula (envia VALVE:CLOSED internamente)
     valveController_stop("CMD_STOP");
     LOG_DONE();
+    eventLog_record("serve_stop|CMD_STOP");
 }
 
+// ── STATUS ────────────────────────────────────────────────────────────────
+// Responde READY / BUSY / ERROR (formato vending machine)
 static void handleStatus(const ParsedCommand* cmd) {
     const char* resp;
     switch (g_opState.state) {
-        case SYS_RUNNING:  resp = RESP_STATUS_RUNNING; break;
-        case SYS_ERROR:    resp = RESP_STATUS_ERROR;   break;
-        default:           resp = RESP_STATUS_IDLE;    break;
+        case SYS_RUNNING:  resp = "BUSY";  break;
+        case SYS_ERROR:    resp = "ERROR"; break;
+        default:           resp = "READY"; break;
     }
     sendAndLog(resp);
     LOG_EXEC(CMD_STATUS, resp);
 }
 
+// ── PING ──────────────────────────────────────────────────────────────────
 static void handlePing(const ParsedCommand* cmd) {
     sendAndLog(RESP_PONG);
     watchdog_kick();
     // Sem LOG_EXEC para não poluir o log com PINGs frequentes
 }
 
+// ── PL (pulsos/litro) ─────────────────────────────────────────────────────
 static void handlePL(const ParsedCommand* cmd) {
     if (!cmd->has_value) { sendAndLog(RESP_ERROR_INVALID); return; }
     uint32_t pl = (uint32_t)atol(cmd->value);
@@ -187,6 +298,7 @@ static void handlePL(const ParsedCommand* cmd) {
     LOG_EXEC(CMD_PL, cmd->value);
 }
 
+// ── TO (timeout sensor) ───────────────────────────────────────────────────
 static void handleTO(const ParsedCommand* cmd) {
     if (!cmd->has_value) { sendAndLog(RESP_ERROR_INVALID); return; }
     uint32_t to = (uint32_t)atol(cmd->value);
@@ -196,15 +308,19 @@ static void handleTO(const ParsedCommand* cmd) {
     LOG_EXEC(CMD_TO, cmd->value);
 }
 
+// ── LOGS (envia log interno via BLE) ─────────────────────────────────────
+static void handleLogs(const ParsedCommand* cmd) {
+    LOG_EXEC("LOGS", "");
+    eventLog_sendViaBLE();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// TAREFA FREERTOS: taskCommandProcessor v2.1
-// Lê da command_queue (FIFO 5) em vez da fila FreeRTOS direta.
-// Garante execução sequencial sem concorrência.
+// TAREFA FREERTOS: taskCommandProcessor v2.2
 // ═══════════════════════════════════════════════════════════════════════════
 void taskCommandProcessor(void* param) {
     char rawCmd[PROTO_RX_BUFFER_SIZE];
 
-    DBG_PRINTLN("[PARSER] taskCommandProcessor iniciada (v2.1)");
+    DBG_PRINTLN("[PARSER] taskCommandProcessor iniciada (v2.2)");
 
     for (;;) {
         // ── Aguarda próximo comando da command_queue (bloqueante) ─────────
@@ -213,7 +329,7 @@ void taskCommandProcessor(void* param) {
         // ── Log RX industrial ─────────────────────────────────────────────
         LOG_RX(rawCmd);
 
-        // ── Parse ─────────────────────────────────────────────────────────
+        // ── Parse (suporta formato $ e formato pipe |) ────────────────────
         ParsedCommand cmd;
         if (!commandParser_parse(rawCmd, &cmd)) {
             LOG_ERR("Comando inválido — parse falhou");
@@ -223,13 +339,14 @@ void taskCommandProcessor(void* param) {
 
         // ── Deduplicação via command_history ──────────────────────────────
         if (cmd.has_cmd_id && cmdHistory_isDuplicate(cmd.cmd_id)) {
-            DBG_PRINTF("[PARSER] DUPLICADO: cmd=%s id=%s | hist=%d\n",
-                       cmd.cmd, cmd.cmd_id, cmdHistory_count());
+            DBG_PRINTF("[PARSER] DUPLICADO (history): cmd=%s id=%s\n", cmd.cmd, cmd.cmd_id);
+            // Para SERVE/ML: reenvia ACK (não executa)
             if (strcmp(cmd.cmd, CMD_ML) == 0) {
-                sendAndLog(RESP_ML_DUPLICATE);
+                sendAck(&cmd, CMD_ML);
             } else {
                 sendAndLog(RESP_DUPLICATE);
             }
+            eventLog_record("duplicate_command|history");
             continue;
         }
 
@@ -257,6 +374,7 @@ void taskCommandProcessor(void* param) {
         else if (strcmp(cmd.cmd, CMD_PING)   == 0) handlePing(&cmd);
         else if (strcmp(cmd.cmd, CMD_PL)     == 0) handlePL(&cmd);
         else if (strcmp(cmd.cmd, CMD_TO)     == 0) handleTO(&cmd);
+        else if (strcmp(cmd.cmd, "LOGS")     == 0) handleLogs(&cmd);
         else {
             LOG_ERR("Comando desconhecido");
             sendAndLog(RESP_ERROR_INVALID);

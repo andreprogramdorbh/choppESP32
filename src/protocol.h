@@ -2,6 +2,10 @@
 #include "Arduino.h"
 #include "config.h"
 
+// ── Macro auxiliar para stringify de defines ──────────────────────────────
+#define STRINGIFY_INNER(x) #x
+#define STRINGIFY(x) STRINGIFY_INNER(x)
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PROTOCOLO BLE INDUSTRIAL — CHOPP ESP32
 // ═══════════════════════════════════════════════════════════════════════════
@@ -67,6 +71,7 @@
 #define RESP_ERROR_INVALID      "ERROR:INVALID_CMD"
 #define RESP_PL_ACK             "PL:ACK"
 #define RESP_TO_ACK             "TO:ACK"
+#define RESP_DUPLICATE          "DUPLICATE"
 
 // ── Prefixos de resposta dinâmica ─────────────────────────────────────────
 #define RESP_VP_PREFIX          "VP:"       // VP:<ml_parcial>
@@ -74,6 +79,7 @@
 
 // ── Timeouts do protocolo ─────────────────────────────────────────────────
 #define PROTO_ACK_TIMEOUT_MS        100UL   // ACK obrigatório em 100ms
+#define PROTO_BLE_WATCHDOG_MS      30000UL  // Watchdog BLE: restart advertising após 30s sem conexão
 #define PROTO_WATCHDOG_MS          5000UL   // Watchdog: fecha válvula após 5s sem cmd
 #define PROTO_HEARTBEAT_INTERVAL_MS 2000UL  // Intervalo de VP durante dispensação
 #define PROTO_CMD_ID_HISTORY        16      // Histórico de CMD_IDs para deduplicação
