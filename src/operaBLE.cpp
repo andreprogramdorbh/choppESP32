@@ -1,3 +1,4 @@
+#include "operacional.h"
 #include "operaBLE.h"
 
 #ifdef USAR_ESP32_UART_BLE
@@ -237,47 +238,11 @@
     // ─────────────────────────────────────────────────────────────────────────
     void setupBLE() {
 
-        // -----------------------------------------------------------------
-        // NOME DINÂMICO: lê os 4 últimos bytes do MAC BLE e forma CHOPP_XXXX
-        //
-        // O MAC BLE do ESP32 é de 6 bytes. Usamos os bytes [4] e [5]
-        // (os 2 últimos) para formar 4 caracteres hexadecimais.
-        //
-        // Exemplo: MAC = AA:BB:CC:DD:EE:F1 → nome = CHOPP_EEF1
-        //
-        // IMPORTANTE: esp_read_mac() com ESP_MAC_BT lê o MAC BLE.
-        //             O MAC WiFi (ESP_MAC_WIFI_STA) é diferente.
-        // -----------------------------------------------------------------
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_BT);
-        char bleName[16];
-        snprintf(bleName, sizeof(bleName), "CHOPP_%02X%02X", mac[4], mac[5]);
+    BLEDevice::init(BLE_NAME);
 
-        DBG_PRINTF("\n[BLE] MAC BLE: %02X:%02X:%02X:%02X:%02X:%02X",
-                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        DBG_PRINTF("\n[BLE] Nome BLE: %s", bleName);
-
-        BLEDevice::init(bleName);
-
-        // -----------------------------------------------------------------
-        // SEGURANÇA — CAMADA 1: Bond/Pairing nativo com PIN 259087
-        //
-        // ESP_LE_AUTH_REQ_SC_MITM_BOND:
-        //   SC  = Secure Connections (BLE 4.2+)
-        //   MITM = Man-in-the-Middle protection
-        //   BOND = armazenar chaves para reconexão automática
-        //
-        // ESP_IO_CAP_OUT:
-        //   O ESP32 "exibe" o PIN (output only).
-        //   O Android deve digitar/confirmar o PIN 259087.
-        //   Isso ativa o Passkey Entry protocol.
-        //
-        // setStaticPIN(259087):
-        //   PIN fixo — o mesmo para todas as unidades.
-        //   Pode ser alterado no config.h (BLE_AUTH_PIN).
-        // -----------------------------------------------------------------
-        BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
-        BLEDevice::setSecurityCallbacks(new MySecurityCallbacks());
+    // Segurança BLE com bond/pairing PIN 259087
+    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
+    BLEDevice::setSecurityCallbacks(new MySecurityCallbacks());
 
         BLESecurity *pSecurity = new BLESecurity();
         pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);

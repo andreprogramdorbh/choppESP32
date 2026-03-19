@@ -130,15 +130,24 @@
         #define LED_STATUS_ON LOW
     #endif
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // EEPROM — Magic flag para identificar configuração gravada
-    // ─────────────────────────────────────────────────────────────────────────
-    #define MAGIC_FLAG_EEPROM 0xF2F2
-    #define MAGIC_EEPROM     0xF2F2  // Alias para o novo protocolo
+    // Nome BLE do dispositivo
+    // IMPORTANTE: deve iniciar com prefixo "CHOPP_" seguido do ID unico da unidade.
+    // O app Android aceita apenas dispositivos com este prefixo (ex: CHOPP_E123, CHOPP_F45A).
+    // Substitua 0001 pelo identificador unico de cada unidade (ex: ultimos 4 digitos do MAC).
+    #define BLE_NAME "CHOPP_0001"
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // WiFi (modo AP e credenciais padrão de desenvolvimento)
-    // ─────────────────────────────────────────────────────────────────────────
+    // PIN de autenticacao BLE
+    // Enviado pelo app Android apos conexao GATT para validar o acesso.
+    // O ESP32 compara o PIN recebido via comando $AUTH:<pin> com este valor.
+    #define BLE_AUTH_PIN "259087"
+
+    // Comando de autenticacao BLE
+    #define COMANDO_AUTH "AUTH:"  // Autenticacao por PIN
+
+    // Flag para identificar se os dados foram gravados na EEPROM
+    #define MAGIC_FLAG_EEPROM 0xF2F2  
+    
+    // Dados para o modo AP (Access Point)
     #define AP_SSID     "CHOPPE"
     #define AP_PASSWORD "1234567890"
         

@@ -1,3 +1,11 @@
+#ifndef OPERACIONAL_H
+#define OPERACIONAL_H
+
+#include <Arduino.h>
+
+
+
+#endif
 #include "config.h"
 #ifndef _OPERACIONAL_H_
     #define _OPERACIONAL_H_
