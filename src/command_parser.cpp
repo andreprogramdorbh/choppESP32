@@ -446,9 +446,14 @@ void taskCommandProcessor(void* param) {
             cmdHistory_register(cmd.cmd_id);
         }
 
-        // ── Verifica autenticação ─────────────────────────────────────────
-        bool requerAuth = (strcmp(cmd.cmd, CMD_AUTH)   != 0 &&
-                           strcmp(cmd.cmd, CMD_PING)   != 0 &&
+        // ── 1. PRIMEIRO: tratar AUTH ──────────────────────────────────────
+        if (strcmp(cmd.cmd, CMD_AUTH) == 0) {
+            handleAuth(&cmd);
+            continue;
+        }
+
+        // ── 2. DEPOIS: bloquear outros comandos se não autenticado ──────
+        bool requerAuth = (strcmp(cmd.cmd, CMD_PING)   != 0 &&
                            strcmp(cmd.cmd, CMD_STATUS) != 0);
 
         if (requerAuth && !g_opState.bleAutenticado) {
@@ -457,9 +462,8 @@ void taskCommandProcessor(void* param) {
             continue;
         }
 
-        // ── Despacha handler ──────────────────────────────────────────────
-        if      (strcmp(cmd.cmd, CMD_AUTH)   == 0) handleAuth(&cmd);
-        else if (strcmp(cmd.cmd, CMD_ML)     == 0) handleML(&cmd);
+        // ── Despacha outros handlers ──────────────────────────────────────
+        if      (strcmp(cmd.cmd, CMD_ML)     == 0) handleML(&cmd);
         else if (strcmp(cmd.cmd, CMD_STOP)   == 0) handleStop(&cmd);
         else if (strcmp(cmd.cmd, CMD_STATUS) == 0) handleStatus(&cmd);
         else if (strcmp(cmd.cmd, CMD_PING)   == 0) handlePing(&cmd);
